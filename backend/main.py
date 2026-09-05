@@ -25,6 +25,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 from fastapi.responses import FileResponse
+from fastapi import UploadFile, File
 
 app = FastAPI(title="Incident Intelligence Platform API")
 
@@ -289,7 +290,8 @@ async def analyze_dataset_video(payload: dict):
 
     try:
         from violence.test_real_video import run_real_video_inference
-        res = run_real_video_inference(video_path)
+        from fastapi.concurrency import run_in_threadpool
+        res = await run_in_threadpool(run_real_video_inference, video_path)
 
         cat = res.get("event_type") or ("Normal" if "Normal" in filename else "".join([c for c in filename.split('_')[0] if not c.isdigit()]))
         loc_info = LOCATION_MAPPINGS.get(cat, {
@@ -330,6 +332,69 @@ async def analyze_dataset_video(payload: dict):
             asyncio.create_task(send_telegram_alert(alert_payload))
 
         return {"success": True, "analysis": res}
+    except Exception as e:
+        return {"error": str(e)}
+
+# Custom Upload Endpoints
+UPLOAD_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Dataset", "uploads"))
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/dataset/uploads", StaticFiles(directory=UPLOAD_DIR), name="dataset_uploads")
+
+@app.post("/api/upload-video")
+async def upload_and_analyze_video(file: UploadFile = File(...)):
+    if not file.filename.endswith(".mp4"):
+        return {"error": "Only .mp4 files are supported"}
+    
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    # Save the uploaded file
+    try:
+        with open(file_path, "wb") as buffer:
+            buffer.write(await file.read())
+    except Exception as e:
+        return {"error": f"Failed to save file: {str(e)}"}
+        
+    try:
+        from violence.test_real_video import run_real_video_inference
+        from fastapi.concurrency import run_in_threadpool
+        res = await run_in_threadpool(run_real_video_inference, file_path)
+        
+        cat = res.get("event_type") or "Anomaly"
+        loc_info = LOCATION_MAPPINGS.get(cat, {
+            "location": "Custom Upload Node",
+            "city": "Unknown",
+            "maps_query": "Custom Upload"
+        })
+        res["location"] = loc_info["location"]
+        res["city"] = loc_info["city"]
+        res["maps_query"] = loc_info["maps_query"]
+
+        if res.get("is_anomaly"):
+            now_ts = time.time()
+            alert_payload = {
+                "id": int(now_ts * 1000),
+                "type": res.get("prediction", "Anomaly Detected"),
+                "event_type": res.get("event_type"),
+                "severity": 5,
+                "confidence": res.get("confidence") / 100.0,
+                "timestamp": now_ts,
+                "camera_id": "USER UPLOAD",
+                "location": loc_info["location"],
+                "city": loc_info["city"],
+                "source": f"Uploaded File ({file.filename})",
+                "sample": file.filename,
+                "timestamp_seconds": res.get("timestamp_seconds", 0),
+                "status": "ACTIVE",
+                "is_dataset_simulation": False
+            }
+            if alert_queue:
+                try:
+                    alert_queue.put(alert_payload)
+                except Exception:
+                    pass
+
+            asyncio.create_task(send_telegram_alert(alert_payload))
+
+        return {"success": True, "analysis": res, "url": f"http://localhost:8000/dataset/uploads/{file.filename}"}
     except Exception as e:
         return {"error": str(e)}
 

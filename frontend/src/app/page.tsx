@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import Head from "next/head";
+import VideoGridItem from "../components/VideoGridItem";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("video"); // 'video', 'i3d', or 'history'
@@ -18,6 +19,10 @@ export default function Home() {
   const [videoEnded, setVideoEnded] = useState<boolean>(false);
   
   const [categoryFilter, setCategoryFilter] = useState<string>("ALL");
+  const [uploadingVideo, setUploadingVideo] = useState<boolean>(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+  const [isGridView, setIsGridView] = useState<boolean>(false);
   
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -215,14 +220,17 @@ export default function Home() {
       }
       
       if (data.alerts && data.alerts.length > 0) {
-        const firstAlert = data.alerts[0];
-        const alertKey = `ws_${firstAlert.id || firstAlert.timestamp}`;
-        if (lastAnnouncedIntervalRef.current !== alertKey) {
-          lastAnnouncedIntervalRef.current = alertKey;
-          const tag = firstAlert.type || firstAlert.event_type || "Threat";
-          const cam = firstAlert.camera_id || "surveillance feed";
-          announceAnomalySpeech(tag, cam);
-        }
+        // We only update the historical incidents list, but we DO NOT 
+        // randomly speak alerts from the background simulation so they
+        // don't interrupt the active video player's announcements.
+        // const firstAlert = data.alerts[0];
+        // const alertKey = `ws_${firstAlert.id || firstAlert.timestamp}`;
+        // if (lastAnnouncedIntervalRef.current !== alertKey) {
+        //   lastAnnouncedIntervalRef.current = alertKey;
+        //   const tag = firstAlert.type || firstAlert.event_type || "Threat";
+        //   const cam = firstAlert.camera_id || "surveillance feed";
+        //   announceAnomalySpeech(tag, cam);
+        // }
       }
 
       if (data.simulation) {
@@ -294,6 +302,72 @@ export default function Home() {
   const handleSelectVideo = (video: any) => {
     setSelectedVideo(video);
     analyzeVideo(video.filename);
+  };
+
+  const handleUploadVideo = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    if (!file.name.endsWith('.mp4')) {
+      alert("Only .mp4 files are supported.");
+      return;
+    }
+    
+    setShowUploadModal(false);
+    setUploadingVideo(true);
+    setUploadError(null);
+    setAnalyzingVideo(true);
+    setVideoAnalysis(null);
+    setCurrentDetections([]);
+    setActiveOverlay(null);
+    setVideoEnded(false);
+    lastAnnouncedIntervalRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.currentTime = 0;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/upload-video", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      
+      if (data.error) {
+        setUploadError(data.error);
+        setUploadingVideo(false);
+        setAnalyzingVideo(false);
+        return;
+      }
+      
+      const newVideo = {
+        filename: file.name,
+        url: data.url,
+        category: data.analysis?.event_type || "Anomaly",
+        location: data.analysis?.location || "Custom Upload",
+        city: data.analysis?.city || "Unknown",
+        maps_query: data.analysis?.maps_query || "Custom Upload",
+        duration: data.analysis?.duration || 0,
+        is_anomaly: data.analysis?.is_anomaly || false,
+      };
+
+      setVideoList(prev => [newVideo, ...prev]);
+      setSelectedVideo(newVideo);
+      
+      if (data.analysis) {
+        setVideoAnalysis(data.analysis);
+        setCurrentDetections(data.analysis.intervals || []);
+      }
+    } catch (err: any) {
+      console.error("Video upload error", err);
+      setUploadError(err.message);
+    } finally {
+      setUploadingVideo(false);
+      setAnalyzingVideo(false);
+    }
   };
 
   // Synchronize In-Video Overlay & Detection Status with HTML5 Video currentTime
@@ -494,7 +568,7 @@ export default function Home() {
       {activeTab === "video" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Real UCF-Crime HTML5 Video Player Container */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className={`space-y-4 ${isGridView ? "lg:col-span-3" : "lg:col-span-2"}`}>
             {/* Video Selector & Category Filter Bar */}
             <div className="bg-neutral-900 border border-neutral-800 p-3 rounded-2xl space-y-3">
               {/* Category Filter Pills */}
@@ -536,6 +610,20 @@ export default function Home() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {uploadError && <span className="text-red-400 text-xs font-bold">{uploadError}</span>}
+                  <button
+                    onClick={() => setIsGridView(!isGridView)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${isGridView ? "bg-indigo-600 text-white border border-indigo-500" : "bg-neutral-800 hover:bg-neutral-700 text-indigo-400 border border-neutral-700"}`}
+                  >
+                    {isGridView ? "🔲 SINGLE VIEW" : "▦ GRID VIEW"}
+                  </button>
+                  <button
+                    onClick={() => setShowUploadModal(true)}
+                    disabled={uploadingVideo || analyzingVideo}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${uploadingVideo ? "bg-blue-900/50 text-blue-300 border border-blue-500/50 cursor-wait animate-pulse" : "bg-blue-600 hover:bg-blue-500 text-white border border-blue-500"}`}
+                  >
+                    {uploadingVideo ? "⏳ UPLOADING..." : "⬆️ UPLOAD VIDEO"}
+                  </button>
                   <button
                     disabled={analyzingVideo}
                     onClick={() => selectedVideo && analyzeVideo(selectedVideo.filename)}
@@ -558,7 +646,21 @@ export default function Home() {
               </div>
             </div>
 
-            {/* HTML5 Video Display with Dynamic AI Detection Overlay */}
+            
+            {isGridView ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 pt-2">
+                {filteredVideos.map((v) => (
+                  <VideoGridItem 
+                    key={v.filename} 
+                    video={v} 
+                    announceAnomalySpeech={announceAnomalySpeech} 
+                    sendTelegramAlert={sendTelegramAlert} 
+                  />
+                ))}
+              </div>
+            ) : (
+              <>
+{/* HTML5 Video Display with Dynamic AI Detection Overlay */}
             <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden aspect-video relative flex flex-col justify-between shadow-2xl">
               {/* Header Overlay */}
               <div className="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/90 to-transparent flex justify-between items-center z-10">
@@ -794,11 +896,16 @@ export default function Home() {
                 </div>
               </div>
             )}
+          
+              </>
+            )}
+
           </div>
 
           {/* Isolated Live Model Detections Panel for Currently Selected Video */}
-          <div className="space-y-4">
-            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between">
+          {!isGridView && (
+            <div className="space-y-4">
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between">
               <div className="flex justify-between items-center mb-3 pb-2 border-b border-neutral-800">
                 <div>
                   <h3 className="font-bold text-sm text-neutral-200 flex items-center gap-2">
@@ -956,6 +1063,7 @@ export default function Home() {
               </div>
             </div>
           </div>
+          )}
         </div>
       )}
 
@@ -1047,6 +1155,47 @@ export default function Home() {
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Instructions Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in">
+          <div className="bg-neutral-900 border border-neutral-700 rounded-3xl max-w-lg w-full p-6 space-y-5 shadow-2xl relative">
+            <div className="flex justify-between items-start border-b border-neutral-800 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-blue-600/20 text-blue-400 rounded-2xl border border-blue-500/30 text-2xl font-black">
+                  ℹ️
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-white mt-1">Upload Instructions</h3>
+                  <p className="text-xs text-neutral-400">Please review model requirements</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowUploadModal(false)}
+                className="text-neutral-400 hover:text-white bg-neutral-800 p-2 rounded-xl text-xs font-bold transition"
+              >
+                ✕ CLOSE
+              </button>
+            </div>
+            
+            <div className="space-y-4 text-sm text-neutral-300">
+              <p>To ensure optimal inference and accurate anomaly detection with our trained model, please follow these guidelines:</p>
+              <ul className="list-disc pl-5 space-y-2">
+                <li><strong>Supported Format:</strong> Only <span className="text-cyan-400 font-bold">.mp4</span> video files are supported.</li>
+                <li><strong>Optimal Resolution:</strong> We highly recommend videos with a resolution of <span className="text-emerald-400 font-bold">340p</span> (or similar low resolutions like 240p/360p) as the model was trained on these dimensions for maximum efficiency and speed.</li>
+                <li><strong>Content:</strong> Ensure the video contains clear surveillance-style footage for the best temporal anomaly detection.</li>
+              </ul>
+            </div>
+            
+            <div className="pt-4 flex justify-end">
+              <label className="cursor-pointer px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm rounded-xl shadow-lg transition">
+                I Understand, Select Video
+                <input type="file" accept=".mp4" className="hidden" onChange={handleUploadVideo} disabled={uploadingVideo || analyzingVideo} />
+              </label>
+            </div>
           </div>
         </div>
       )}
