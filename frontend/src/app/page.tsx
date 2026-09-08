@@ -43,6 +43,10 @@ export default function Home() {
   const [anomaliesCount, setAnomaliesCount] = useState<number>(0);
   const [normalCount, setNormalCount] = useState<number>(0);
   const [accuracy, setAccuracy] = useState<number>(100.0);
+  const [simSamples, setSimSamples] = useState<any[]>([]);
+  const [latestPrediction, setLatestPrediction] = useState<any>(null);
+  const [categoryCounts, setCategoryCounts] = useState<{ [key: string]: number }>({});
+  const [simSpeed, setSimSpeed] = useState<number>(1.2);
 
   // Automatic Female Siri Voice Speech Synthesis Engine
   const lastAnnouncedIntervalRef = useRef<string | null>(null);
@@ -190,8 +194,8 @@ export default function Home() {
       .catch((err) => console.error("Could not fetch raw dataset videos", err));
   }, []);
 
-  // Sync I3D Simulation Status
-  useEffect(() => {
+  // Sync I3D Simulation Status & Samples
+  const fetchSimulationStatus = () => {
     fetch("http://localhost:8000/api/simulation/status")
       .then((res) => res.json())
       .then((data) => {
@@ -206,10 +210,40 @@ export default function Home() {
           setAnomaliesCount(data.anomalies || 0);
           setNormalCount(data.normal || 0);
           setAccuracy(data.accuracy !== undefined ? data.accuracy : 100.0);
+          if (data.latest_prediction) setLatestPrediction(data.latest_prediction);
+          if (data.category_counts) setCategoryCounts(data.category_counts);
+          if (data.step_delay) setSimSpeed(data.step_delay);
         }
       })
       .catch((err) => console.error("Could not sync simulation status", err));
+  };
+
+  const fetchSimulationSamples = () => {
+    fetch("http://localhost:8000/api/simulation/samples")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.samples) {
+          setSimSamples(data.samples);
+          if (data.total) setTotalSamples(data.total);
+        }
+      })
+      .catch((err) => console.error("Could not fetch simulation samples", err));
+  };
+
+  useEffect(() => {
+    fetchSimulationStatus();
+    fetchSimulationSamples();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === "i3d") {
+      fetchSimulationStatus();
+      fetchSimulationSamples();
+      if (!canvasSrc) {
+        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+      }
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     ws.current = new WebSocket("ws://localhost:8000/ws/alerts");
@@ -220,17 +254,7 @@ export default function Home() {
       }
       
       if (data.alerts && data.alerts.length > 0) {
-        // We only update the historical incidents list, but we DO NOT 
-        // randomly speak alerts from the background simulation so they
-        // don't interrupt the active video player's announcements.
-        // const firstAlert = data.alerts[0];
-        // const alertKey = `ws_${firstAlert.id || firstAlert.timestamp}`;
-        // if (lastAnnouncedIntervalRef.current !== alertKey) {
-        //   lastAnnouncedIntervalRef.current = alertKey;
-        //   const tag = firstAlert.type || firstAlert.event_type || "Threat";
-        //   const cam = firstAlert.camera_id || "surveillance feed";
-        //   announceAnomalySpeech(tag, cam);
-        // }
+        // Handled silently for background logs
       }
 
       if (data.simulation) {
@@ -244,6 +268,9 @@ export default function Home() {
         setAnomaliesCount(data.simulation.anomalies || 0);
         setNormalCount(data.simulation.normal || 0);
         setAccuracy(data.simulation.accuracy !== undefined ? data.simulation.accuracy : 100.0);
+        if (data.simulation.latest_prediction) setLatestPrediction(data.simulation.latest_prediction);
+        if (data.simulation.category_counts) setCategoryCounts(data.simulation.category_counts);
+        if (data.simulation.step_delay) setSimSpeed(data.simulation.step_delay);
       }
     };
     return () => ws.current?.close();
@@ -439,8 +466,73 @@ export default function Home() {
         setSimRunning(data.status.running || false);
         setSimStatusText(data.status.status || (simRunning ? "STOPPED" : "RUNNING"));
       }
+      if (!canvasSrc) {
+        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+      }
     } catch (err) {
       console.error("Failed to toggle simulation", err);
+    }
+  };
+
+  const handleSelectSample = async (idx: number) => {
+    try {
+      const res = await fetch("http://localhost:8000/api/simulation/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index: idx }),
+      });
+      const data = await res.json();
+      if (data && data.status) {
+        setCurrentIdx(data.status.current_idx || idx + 1);
+        setCurrentSample(data.status.current_sample || "");
+        if (data.status.latest_prediction) setLatestPrediction(data.status.latest_prediction);
+      }
+      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+    } catch (err) {
+      console.error("Failed to select sample", err);
+    }
+  };
+
+  const handleStepNext = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/simulation/next", { method: "POST" });
+      const data = await res.json();
+      if (data && data.status) {
+        setCurrentIdx(data.status.current_idx || 0);
+        setCurrentSample(data.status.current_sample || "");
+        if (data.status.latest_prediction) setLatestPrediction(data.status.latest_prediction);
+      }
+      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+    } catch (err) {
+      console.error("Failed to step next", err);
+    }
+  };
+
+  const handleReplay = async () => {
+    try {
+      const res = await fetch("http://localhost:8000/api/simulation/replay", { method: "POST" });
+      const data = await res.json();
+      if (data && data.status) {
+        setSimRunning(data.status.running || false);
+        setSimStatusText(data.status.status || "RUNNING");
+        setCurrentIdx(data.status.current_idx || 1);
+      }
+      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+    } catch (err) {
+      console.error("Failed to replay simulation", err);
+    }
+  };
+
+  const handleSetSpeed = async (spd: number) => {
+    setSimSpeed(spd);
+    try {
+      await fetch("http://localhost:8000/api/simulation/speed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ speed: spd }),
+      });
+    } catch (err) {
+      console.error("Failed to set speed", err);
     }
   };
 
@@ -1068,48 +1160,257 @@ export default function Home() {
       )}
 
       {activeTab === "i3d" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden aspect-video relative flex flex-col justify-between shadow-2xl">
-              <div className="w-full h-full flex items-center justify-center bg-neutral-950">
-                {canvasSrc ? (
-                  <img src={canvasSrc} alt="I3D Feature Analysis Signal" className="w-full h-full object-contain" />
-                ) : (
-                  <div className="text-center p-8 text-neutral-400">
-                    <p className="font-bold mb-2">Technical Feature Evaluator (.npy Engine)</p>
-                    <button
-                      onClick={toggleSimulation}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
-                    >
-                      {simRunning ? "■ STOP .NPY EVALUATION" : "▶ START .NPY EVALUATION"}
-                    </button>
+        <div className="space-y-6">
+          {/* Studio Control Toolbar */}
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4 shadow-xl flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                simRunning ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse" : "bg-neutral-800 text-neutral-400 border border-neutral-700"
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${simRunning ? "bg-emerald-400" : "bg-neutral-500"}`} />
+                {simRunning ? "Live .npy Evaluation" : simStatusText}
+              </span>
+              <div className="hidden sm:block text-xs font-mono text-neutral-400">
+                Sample <span className="text-cyan-400 font-bold">{currentIdx}</span> of <span className="text-white font-bold">{totalSamples}</span>
+              </div>
+            </div>
+
+            {/* Quick Action Controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={toggleSimulation}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-1.5 ${
+                  simRunning
+                    ? "bg-amber-600 hover:bg-amber-500 text-white"
+                    : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                }`}
+              >
+                {simRunning ? "⏸ PAUSE" : "▶ START EVALUATION"}
+              </button>
+              
+              <button
+                onClick={handleStepNext}
+                disabled={simRunning}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-200 transition border border-neutral-700 flex items-center gap-1"
+                title="Evaluate next sample"
+              >
+                ⏭ NEXT
+              </button>
+
+              <button
+                onClick={handleReplay}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-neutral-800 hover:bg-neutral-700 text-neutral-200 transition border border-neutral-700 flex items-center gap-1"
+                title="Restart evaluation from sample 1"
+              >
+                🔄 REPLAY
+              </button>
+
+              {/* Playback speed selector */}
+              <div className="flex items-center bg-neutral-950 border border-neutral-800 rounded-xl p-0.5 text-[11px] font-bold">
+                <button
+                  onClick={() => handleSetSpeed(0.6)}
+                  className={`px-2.5 py-1 rounded-lg transition ${simSpeed <= 0.8 ? "bg-indigo-600 text-white" : "text-neutral-400 hover:text-white"}`}
+                >
+                  0.6s
+                </button>
+                <button
+                  onClick={() => handleSetSpeed(1.2)}
+                  className={`px-2.5 py-1 rounded-lg transition ${simSpeed > 0.8 && simSpeed <= 1.6 ? "bg-indigo-600 text-white" : "text-neutral-400 hover:text-white"}`}
+                >
+                  1.2s
+                </button>
+                <button
+                  onClick={() => handleSetSpeed(2.4)}
+                  className={`px-2.5 py-1 rounded-lg transition ${simSpeed > 1.6 ? "bg-indigo-600 text-white" : "text-neutral-400 hover:text-white"}`}
+                >
+                  2.4s
+                </button>
+              </div>
+            </div>
+
+            {/* Sample Selector Dropdown */}
+            {simSamples.length > 0 && (
+              <div className="w-full sm:w-auto flex items-center gap-2">
+                <label className="text-xs text-neutral-400 font-semibold whitespace-nowrap">Jump to Sample:</label>
+                <select
+                  value={currentIdx > 0 ? currentIdx - 1 : 0}
+                  onChange={(e) => handleSelectSample(parseInt(e.target.value))}
+                  className="bg-neutral-950 border border-neutral-700 rounded-xl px-3 py-1.5 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-500 max-w-[260px] truncate"
+                >
+                  {simSamples.map((s) => (
+                    <option key={s.index} value={s.index}>
+                      [{s.index + 1}] {s.category} - {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Waveform & Visual Analysis Canvas */}
+            <div className="lg:col-span-2 space-y-4">
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden aspect-video relative flex flex-col justify-between shadow-2xl">
+                <div className="w-full h-full flex items-center justify-center bg-neutral-950">
+                  {canvasSrc ? (
+                    <img
+                      src={canvasSrc}
+                      alt="I3D Feature Analysis Signal"
+                      className="w-full h-full object-contain"
+                      onError={() => {
+                        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+                      }}
+                    />
+                  ) : (
+                    <div className="text-center p-8 text-neutral-400 space-y-4">
+                      <div className="inline-block p-4 bg-indigo-500/10 rounded-2xl border border-indigo-500/30 text-indigo-400 text-3xl">
+                        📊
+                      </div>
+                      <div>
+                        <p className="font-bold text-white text-base">UCF-Crime I3D Feature Engine Ready</p>
+                        <p className="text-xs text-neutral-400 mt-1">
+                          {totalSamples} verified .npy temporal tensors discovered. Click Start to begin live evaluation.
+                        </p>
+                      </div>
+                      <button
+                        onClick={toggleSimulation}
+                        className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg transition"
+                      >
+                        ▶ START .NPY EVALUATION
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Real-time Diagnostics Strip */}
+              <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-4 shadow-lg space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-neutral-400 font-semibold">Current Sample:</span>
+                    <span className="font-mono font-bold text-cyan-400">{currentSample}</span>
+                  </div>
+                  <div className="font-mono text-neutral-400">
+                    Progress: <span className="text-white font-bold">{progress.toFixed(1)}%</span>
+                  </div>
+                </div>
+
+                {/* Progress bar */}
+                <div className="w-full bg-neutral-950 rounded-full h-2 overflow-hidden border border-neutral-800">
+                  <div
+                    className="bg-gradient-to-r from-cyan-500 to-indigo-500 h-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
+                  />
+                </div>
+
+                {latestPrediction && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 text-xs border-t border-neutral-800">
+                    <div>
+                      <span className="text-neutral-500 block text-[10px] uppercase font-semibold">Ground Truth</span>
+                      <span className="font-bold text-neutral-200">{latestPrediction.ground_truth}</span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 block text-[10px] uppercase font-semibold">Prediction</span>
+                      <span className={`font-bold ${latestPrediction.is_anomaly ? "text-red-400" : "text-emerald-400"}`}>
+                        {latestPrediction.is_anomaly ? "Anomaly / Threat" : "Normal Clean"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 block text-[10px] uppercase font-semibold">Confidence</span>
+                      <span className="font-mono font-bold text-cyan-400">
+                        {(latestPrediction.confidence * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-neutral-500 block text-[10px] uppercase font-semibold">Match Verdict</span>
+                      <span className={`font-bold inline-flex items-center gap-1 ${
+                        latestPrediction.is_correct ? "text-emerald-400" : "text-red-400"
+                      }`}>
+                        {latestPrediction.is_correct ? "✓ ACCURATE" : "✗ MISMATCH"}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
             </div>
-          </div>
 
-          <div className="bg-neutral-900 border border-neutral-800 p-4 rounded-2xl space-y-3 text-xs">
-            <h3 className="font-bold text-sm text-cyan-400">Dataset (.npy) Evaluator Metrics</h3>
-            <div className="flex justify-between py-1.5 border-b border-neutral-800">
-              <span className="text-neutral-400">Total Evaluated:</span>
-              <span className="font-bold text-white">{totalProcessed} / {totalSamples}</span>
-            </div>
-            <div className="flex justify-between py-1.5 border-b border-neutral-800">
-              <span className="text-neutral-400">Anomalies Detected:</span>
-              <span className="font-bold text-red-400">{anomaliesCount}</span>
-            </div>
-            <div className="flex justify-between py-1.5 border-b border-neutral-800">
-              <span className="text-neutral-400">Normal Clean:</span>
-              <span className="font-bold text-emerald-400">{normalCount}</span>
-            </div>
-            <div className="flex justify-between py-1.5">
-              <span className="text-neutral-400">Evaluation Score:</span>
-              <span className="font-bold text-cyan-400">{accuracy.toFixed(1)}%</span>
+            {/* Sidebar Metrics and Info */}
+            <div className="space-y-4">
+              <div className="bg-neutral-900 border border-neutral-800 p-5 rounded-2xl space-y-4 text-xs shadow-xl">
+                <h3 className="font-bold text-sm text-cyan-400 flex items-center justify-between">
+                  <span>Dataset (.npy) Evaluator Metrics</span>
+                  <span className="text-[10px] px-2 py-0.5 bg-cyan-500/10 border border-cyan-500/30 rounded text-cyan-400 font-mono">
+                    2048-D
+                  </span>
+                </h3>
+
+                <div className="space-y-2.5">
+                  <div className="flex justify-between py-1.5 border-b border-neutral-800">
+                    <span className="text-neutral-400">Total Evaluated:</span>
+                    <span className="font-bold text-white font-mono">{totalProcessed} / {totalSamples}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-neutral-800">
+                    <span className="text-neutral-400">Anomalies Detected:</span>
+                    <span className="font-bold text-red-400 font-mono">{anomaliesCount}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5 border-b border-neutral-800">
+                    <span className="text-neutral-400">Normal Clean:</span>
+                    <span className="font-bold text-emerald-400 font-mono">{normalCount}</span>
+                  </div>
+                  <div className="flex justify-between py-1.5">
+                    <span className="text-neutral-400">Evaluation Score:</span>
+                    <span className="font-bold text-cyan-400 font-mono text-sm">{accuracy.toFixed(1)}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Anomaly Category Breakdown */}
+              {Object.keys(categoryCounts).length > 0 && (
+                <div className="bg-neutral-900 border border-neutral-800 p-5 rounded-2xl space-y-3 text-xs shadow-xl">
+                  <h4 className="font-bold text-neutral-300 text-xs uppercase tracking-wider">
+                    Detected Incident Categories
+                  </h4>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(categoryCounts).map(([cat, count]) => (
+                      <span
+                        key={cat}
+                        className="px-2.5 py-1 bg-neutral-950 border border-neutral-800 rounded-lg text-neutral-300 font-mono text-[11px] flex items-center gap-1.5"
+                      >
+                        <span className="text-indigo-400 font-bold">{cat}:</span>
+                        <span className="text-red-400 font-bold">{count}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Technical Specifications */}
+              <div className="bg-neutral-900/60 border border-neutral-800/80 p-4 rounded-2xl space-y-2 text-[11px] text-neutral-400 font-mono">
+                <div className="font-bold text-neutral-300 uppercase tracking-wider text-xs mb-1">
+                  Architecture Specs
+                </div>
+                <div className="flex justify-between">
+                  <span>Backbone:</span>
+                  <span className="text-neutral-200">I3D Inflated 3D Conv</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Input Tensor:</span>
+                  <span className="text-cyan-400">(T, 10, 2048) float32</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Classifier:</span>
+                  <span className="text-neutral-200">Bi-LSTM + Temporal Head</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Weights File:</span>
+                  <span className="text-emerald-400">best_violence_model.pt</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       )}
+
 
       {activeTab === "history" && (
         <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 shadow-xl">

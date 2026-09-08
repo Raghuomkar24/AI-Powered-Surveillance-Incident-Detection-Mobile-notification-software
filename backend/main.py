@@ -24,7 +24,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi import UploadFile, File
 
 app = FastAPI(title="Incident Intelligence Platform API")
@@ -456,6 +456,47 @@ async def replay_simulation():
 async def get_simulation_status():
     return global_dataset_simulation.get_status()
 
+@app.get("/api/simulation/frame")
+async def get_simulation_frame():
+    frame_bytes = global_dataset_simulation.latest_frame
+    if not frame_bytes and global_dataset_simulation.npy_files:
+        global_dataset_simulation.select_sample(0)
+        frame_bytes = global_dataset_simulation.latest_frame
+    if frame_bytes:
+        return Response(content=frame_bytes, media_type="image/jpeg", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+    return Response(status_code=404)
+
+@app.get("/api/simulation/samples")
+async def get_simulation_samples():
+    return {
+        "samples": global_dataset_simulation.get_sample_list(),
+        "total": global_dataset_simulation.total_samples,
+        "current_idx": global_dataset_simulation.current_idx
+    }
+
+@app.post("/api/simulation/select")
+async def select_simulation_sample(payload: dict = None):
+    idx = 0
+    if payload and "index" in payload:
+        idx = int(payload["index"])
+    res = global_dataset_simulation.select_sample(idx)
+    status = global_dataset_simulation.get_status()
+    return {"success": True, "result": res, "status": status}
+
+@app.post("/api/simulation/next")
+async def next_simulation_sample():
+    res = global_dataset_simulation.step_next()
+    status = global_dataset_simulation.get_status()
+    return {"success": True, "result": res, "status": status}
+
+@app.post("/api/simulation/speed")
+async def set_simulation_speed(payload: dict = None):
+    delay = 1.2
+    if payload and "speed" in payload:
+        delay = float(payload["speed"])
+    new_delay = global_dataset_simulation.set_speed(delay)
+    return {"success": True, "step_delay": new_delay}
+
 @app.websocket("/ws/alerts")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -471,13 +512,19 @@ async def websocket_endpoint(websocket: WebSocket):
         use_redis = False
         print(f"Notice: Redis Pub/Sub fallback active (Redis not connected: {e})")
 
+    last_sent_seq = -1
+    last_status_time = 0.0
+
     try:
         while True:
-            current_frame = global_dataset_simulation.latest_frame if (global_dataset_simulation.running and global_dataset_simulation.latest_frame) else None
+            current_frame = global_dataset_simulation.latest_frame
             sim_status = global_dataset_simulation.get_status()
+            current_seq = sim_status.get("frame_seq", 0)
+            now = time.time()
 
-            if current_frame:
-
+            # Push feed payload whenever frame updates, or push initial frame on connection
+            if current_frame and (current_seq != last_sent_seq or last_sent_seq == -1):
+                last_sent_seq = current_seq
                 b64_image = base64.b64encode(current_frame).decode('utf-8')
                 payload = {
                     "type": "feed",
@@ -486,6 +533,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     "simulation": sim_status
                 }
                 await websocket.send_json(payload)
+                last_status_time = now
+            elif now - last_status_time > 0.6:
+                # Periodic status heartbeat
+                payload = {
+                    "type": "status",
+                    "simulation": sim_status
+                }
+                await websocket.send_json(payload)
+                last_status_time = now
             
             pending_alerts = []
             if use_redis and pubsub:
@@ -512,14 +568,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 asyncio.create_task(send_telegram_alert(alert_data))
                 
                 # 3. WebSocket push
+                b64_img = base64.b64encode(current_frame).decode('utf-8') if current_frame else None
                 await websocket.send_json({
                     "type": "feed",
-                    "image": f"data:image/jpeg;base64,{b64_image}" if current_frame else None,
+                    "image": f"data:image/jpeg;base64,{b64_img}" if b64_img else None,
                     "alerts": [alert_data],
                     "simulation": sim_status
                 })
                 
-            await asyncio.sleep(0.03) 
+            await asyncio.sleep(0.04)
+ 
 
 
             

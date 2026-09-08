@@ -7,10 +7,10 @@
         "0": "NORMAL",
         "1": "VIOLENCE/FIGHT"
     },
-    "best_val_f1": 0.5714285714285714,
-    "best_val_acc": 0.4,
+    "best_val_f1": 1.0,
+    "best_val_acc": 1.0,
     "best_val_precision": 1.0,
-    "best_val_recall": 0.4,
+    "best_val_recall": 1.0,
     "epoch": 1,
-    "training_time_sec": 3.4478375911712646
+    "training_time_sec": 1.3895454406738281
 }
