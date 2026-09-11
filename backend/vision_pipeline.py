@@ -35,13 +35,18 @@ class VisionPipeline:
         self.model = YOLO(model_path) 
         
         # Initialize MediaPipe Pose
-        self.mp_pose = mp.solutions.pose
-        self.pose = self.mp_pose.Pose(
-            static_image_mode=False,
-            model_complexity=1,
-            enable_segmentation=False,
-            min_detection_confidence=0.5
-        )
+        try:
+            self.mp_pose = mp.solutions.pose
+            self.pose = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                enable_segmentation=False,
+                min_detection_confidence=0.5
+            )
+        except Exception as e:
+            print(f"Notice: MediaPipe Pose fallback active ({e})")
+            self.mp_pose = None
+            self.pose = None
         
         if polygon_points is None:
             self.polygon_points = [(0.3, 0.3), (0.7, 0.3), (0.7, 0.7), (0.3, 0.7)]
@@ -166,7 +171,7 @@ class VisionPipeline:
                     cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, box_color, 2)
 
                     person_crop = frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-                    if person_crop.size > 0:
+                    if person_crop.size > 0 and self.pose is not None and self.mp_pose is not None:
                         pose_results = self.pose.process(cv2.cvtColor(person_crop, cv2.COLOR_BGR2RGB))
                         if pose_results.pose_landmarks:
                             lm = pose_results.pose_landmarks.landmark
