@@ -11,7 +11,7 @@ import cv2
 import time
 from dotenv import load_dotenv
 import redis.asyncio as aioredis
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -29,9 +29,12 @@ from fastapi import UploadFile, File
 
 app = FastAPI(title="Incident Intelligence Platform API")
 
+cors_origins_env = os.getenv("CORS_ORIGINS", "*")
+origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins if origins else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -232,7 +235,8 @@ LOCATION_MAPPINGS = {
 }
 
 @app.get("/api/dataset/videos")
-async def list_dataset_videos():
+async def list_dataset_videos(request: Request):
+    base_url = os.getenv("PUBLIC_API_URL") or str(request.base_url).rstrip("/")
     video_files = sorted(glob.glob(os.path.join(DATASET_VIDEO_DIR, "*.mp4")))
     result = []
     for vf in video_files:
@@ -261,7 +265,7 @@ async def list_dataset_videos():
         result.append({
             "filename": fn,
             "path": vf,
-            "url": f"http://localhost:8000/dataset/videos/{fn}",
+            "url": f"{base_url}/dataset/videos/{fn}",
             "duration": round(duration, 2),
             "fps": round(fps, 2),
             "resolution": f"{w}x{h}",
@@ -341,7 +345,8 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/dataset/uploads", StaticFiles(directory=UPLOAD_DIR), name="dataset_uploads")
 
 @app.post("/api/upload-video")
-async def upload_and_analyze_video(file: UploadFile = File(...)):
+async def upload_and_analyze_video(request: Request, file: UploadFile = File(...)):
+    base_url = os.getenv("PUBLIC_API_URL") or str(request.base_url).rstrip("/")
     if not file.filename.endswith(".mp4"):
         return {"error": "Only .mp4 files are supported"}
     
@@ -394,7 +399,7 @@ async def upload_and_analyze_video(file: UploadFile = File(...)):
 
             asyncio.create_task(send_telegram_alert(alert_payload))
 
-        return {"success": True, "analysis": res, "url": f"http://localhost:8000/dataset/uploads/{file.filename}"}
+        return {"success": True, "analysis": res, "url": f"{base_url}/dataset/uploads/{file.filename}"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -505,7 +510,8 @@ async def websocket_endpoint(websocket: WebSocket):
     redis_client = None
     use_redis = True
     try:
-        redis_client = aioredis.from_url("redis://localhost", socket_timeout=1.0)
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+        redis_client = aioredis.from_url(redis_url, socket_timeout=1.0)
         pubsub = redis_client.pubsub()
         await pubsub.subscribe("alerts:raw")
     except Exception as e:

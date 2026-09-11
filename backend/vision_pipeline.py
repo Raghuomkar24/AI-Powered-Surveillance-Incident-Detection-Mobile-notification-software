@@ -18,13 +18,19 @@ class VisionPipeline:
         self.alert_queue = alert_queue
         
         # Redis connection for Pub/Sub
+        import os
         try:
-            self.redis_client = redis.Redis(host='localhost', port=6379, db=0, socket_timeout=1.0)
+            redis_url = os.getenv("REDIS_URL")
+            if redis_url:
+                self.redis_client = redis.from_url(redis_url, socket_timeout=1.0)
+            else:
+                redis_host = os.getenv("REDIS_HOST", "localhost")
+                redis_port = int(os.getenv("REDIS_PORT", "6379"))
+                self.redis_client = redis.Redis(host=redis_host, port=redis_port, db=0, socket_timeout=1.0)
         except Exception:
             self.redis_client = None
         
         # Load YOLOv8 nano (ONNX preferred for speed)
-        import os
         model_path = "yolov8n.onnx" if os.path.exists("yolov8n.onnx") else "yolov8n.pt"
         self.model = YOLO(model_path) 
         

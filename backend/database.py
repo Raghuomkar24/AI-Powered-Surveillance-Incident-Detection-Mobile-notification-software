@@ -1,8 +1,9 @@
 import asyncpg
 import json
+import os
 from datetime import datetime
 
-DATABASE_URL = "postgres://madhva:password@127.0.0.1:5432/incident_db"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://madhva:password@127.0.0.1:5432/incident_db")
 IN_MEMORY_INCIDENTS = []
 
 async def init_db():

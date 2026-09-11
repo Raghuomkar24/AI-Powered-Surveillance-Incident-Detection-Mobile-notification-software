@@ -1,0 +1,29 @@
+services:
+  # Python AI Backend Service
+  - type: web
+    name: surveillance-backend
+    env: docker
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    healthCheckPath: /api/simulation/status
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: CORS_ORIGINS
+        value: "*"
+
+  # Next.js Frontend Service
+  - type: web
+    name: surveillance-frontend
+    env: node
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: surveillance-backend
+          property: host

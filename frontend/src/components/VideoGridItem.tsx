@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { API_BASE_URL } from "../lib/api";
 
 const formatTime = (sec: number) => {
   const m = Math.floor(sec / 60);
@@ -20,7 +21,7 @@ export default function VideoGridItem({ video, announceAnomalySpeech, sendTelegr
     const analyzeVideo = async () => {
       setAnalyzingVideo(true);
       try {
-        const res = await fetch("http://localhost:8000/api/dataset/analyze-video", {
+        const res = await fetch(`${API_BASE_URL}/api/dataset/analyze-video`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ filename: video.filename })

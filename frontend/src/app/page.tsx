@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import Head from "next/head";
 import VideoGridItem from "../components/VideoGridItem";
+import { API_BASE_URL, WS_BASE_URL } from "../lib/api";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("video"); // 'video', 'i3d', or 'history'
@@ -103,7 +104,7 @@ export default function Home() {
         maps_query: selectedVideo?.maps_query || selectedVideo?.location
       };
 
-      const res = await fetch("http://localhost:8000/api/telegram/send-alert", {
+      const res = await fetch(`${API_BASE_URL}/api/telegram/send-alert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -125,7 +126,7 @@ export default function Home() {
     setTelegramSending(true);
     setTelegramStatusMsg("");
     try {
-      const res = await fetch("http://localhost:8000/api/telegram/config", {
+      const res = await fetch(`${API_BASE_URL}/api/telegram/config`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -174,7 +175,7 @@ export default function Home() {
 
   // Fetch Available Real UCF-Crime Videos & Telegram Config on Mount
   useEffect(() => {
-    fetch("http://localhost:8000/api/telegram/config")
+    fetch(`${API_BASE_URL}/api/telegram/config`)
       .then((res) => res.json())
       .then((data) => {
         setTelegramConfig(data);
@@ -182,7 +183,7 @@ export default function Home() {
       })
       .catch((err) => console.error("Could not fetch telegram config", err));
 
-    fetch("http://localhost:8000/api/dataset/videos")
+    fetch(`${API_BASE_URL}/api/dataset/videos`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.videos && data.videos.length > 0) {
@@ -196,7 +197,7 @@ export default function Home() {
 
   // Sync I3D Simulation Status & Samples
   const fetchSimulationStatus = () => {
-    fetch("http://localhost:8000/api/simulation/status")
+    fetch(`${API_BASE_URL}/api/simulation/status`)
       .then((res) => res.json())
       .then((data) => {
         if (data) {
@@ -219,7 +220,7 @@ export default function Home() {
   };
 
   const fetchSimulationSamples = () => {
-    fetch("http://localhost:8000/api/simulation/samples")
+    fetch(`${API_BASE_URL}/api/simulation/samples`)
       .then((res) => res.json())
       .then((data) => {
         if (data && data.samples) {
@@ -240,13 +241,13 @@ export default function Home() {
       fetchSimulationStatus();
       fetchSimulationSamples();
       if (!canvasSrc) {
-        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+        setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
       }
     }
   }, [activeTab]);
 
   useEffect(() => {
-    ws.current = new WebSocket("ws://localhost:8000/ws/alerts");
+    ws.current = new WebSocket(`${WS_BASE_URL}/ws/alerts`);
     ws.current.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === "feed" && data.image) {
@@ -278,7 +279,7 @@ export default function Home() {
 
   useEffect(() => {
     if (activeTab === "history") {
-      fetch("http://localhost:8000/api/incidents")
+      fetch(`${API_BASE_URL}/api/incidents`)
         .then((res) => res.json())
         .then((data) => {
           if (data.incidents) {
@@ -306,7 +307,7 @@ export default function Home() {
     }
 
     try {
-      const res = await fetch("http://localhost:8000/api/dataset/analyze-video", {
+      const res = await fetch(`${API_BASE_URL}/api/dataset/analyze-video`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename })
@@ -357,7 +358,7 @@ export default function Home() {
     formData.append("file", file);
 
     try {
-      const res = await fetch("http://localhost:8000/api/upload-video", {
+      const res = await fetch(`${API_BASE_URL}/api/upload-video`, {
         method: "POST",
         body: formData,
       });
@@ -456,8 +457,8 @@ export default function Home() {
 
   const toggleSimulation = async () => {
     const endpoint = simRunning
-      ? "http://localhost:8000/api/simulation/stop"
-      : "http://localhost:8000/api/simulation/start";
+      ? `${API_BASE_URL}/api/simulation/stop`
+      : `${API_BASE_URL}/api/simulation/start`;
 
     try {
       const res = await fetch(endpoint, { method: "POST" });
@@ -467,7 +468,7 @@ export default function Home() {
         setSimStatusText(data.status.status || (simRunning ? "STOPPED" : "RUNNING"));
       }
       if (!canvasSrc) {
-        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+        setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
       }
     } catch (err) {
       console.error("Failed to toggle simulation", err);
@@ -476,7 +477,7 @@ export default function Home() {
 
   const handleSelectSample = async (idx: number) => {
     try {
-      const res = await fetch("http://localhost:8000/api/simulation/select", {
+      const res = await fetch(`${API_BASE_URL}/api/simulation/select`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ index: idx }),
@@ -487,7 +488,7 @@ export default function Home() {
         setCurrentSample(data.status.current_sample || "");
         if (data.status.latest_prediction) setLatestPrediction(data.status.latest_prediction);
       }
-      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+      setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
     } catch (err) {
       console.error("Failed to select sample", err);
     }
@@ -495,14 +496,14 @@ export default function Home() {
 
   const handleStepNext = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/simulation/next", { method: "POST" });
+      const res = await fetch(`${API_BASE_URL}/api/simulation/next`, { method: "POST" });
       const data = await res.json();
       if (data && data.status) {
         setCurrentIdx(data.status.current_idx || 0);
         setCurrentSample(data.status.current_sample || "");
         if (data.status.latest_prediction) setLatestPrediction(data.status.latest_prediction);
       }
-      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+      setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
     } catch (err) {
       console.error("Failed to step next", err);
     }
@@ -510,14 +511,14 @@ export default function Home() {
 
   const handleReplay = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/simulation/replay", { method: "POST" });
+      const res = await fetch(`${API_BASE_URL}/api/simulation/replay`, { method: "POST" });
       const data = await res.json();
       if (data && data.status) {
         setSimRunning(data.status.running || false);
         setSimStatusText(data.status.status || "RUNNING");
         setCurrentIdx(data.status.current_idx || 1);
       }
-      setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+      setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
     } catch (err) {
       console.error("Failed to replay simulation", err);
     }
@@ -526,7 +527,7 @@ export default function Home() {
   const handleSetSpeed = async (spd: number) => {
     setSimSpeed(spd);
     try {
-      await fetch("http://localhost:8000/api/simulation/speed", {
+      await fetch(`${API_BASE_URL}/api/simulation/speed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ speed: spd }),
@@ -1258,7 +1259,7 @@ export default function Home() {
                       alt="I3D Feature Analysis Signal"
                       className="w-full h-full object-contain"
                       onError={() => {
-                        setCanvasSrc(`http://localhost:8000/api/simulation/frame?t=${Date.now()}`);
+                        setCanvasSrc(`${API_BASE_URL}/api/simulation/frame?t=${Date.now()}`);
                       }}
                     />
                   ) : (
